@@ -1,3 +1,5 @@
+// 宣告變數用來存放背景圖片檔案（bg/0.jpg）
+let bgImage;
 // 宣告變數用來存放角色1的「停止（待機）」圖片精靈圖檔
 let idleSpriteSheet;
 // 宣告變數用來存放角色1的「走路」圖片精靈圖檔
@@ -26,6 +28,9 @@ let facingDirection = 1;
 
 // 宣告變數記錄角色1目前的 X 軸中心位置（將在 setup 中初始化為畫布寬度的 2/3）
 let posX;
+// 宣告變數記錄三張串接背景的水平捲動偏移量（0 代表初始位置，畫面正中央對準中間那張背景）
+let bgScrollX = 0;
+
 // 宣告變數記錄目前角色播放到第幾張影格（從第 0 張開始）
 let currentFrame = 0;
 // 設定角色動畫播放速度（每經過幾個畫面更新週期切換下一張圖，數字越大動作越慢）
@@ -35,6 +40,8 @@ const EFFECT_ANIMATION_SPEED = 3;
 
 // preload 函式會在程式開始前預先載入外部資源，確保所有圖片載入完成才執行後續程式
 function preload() {
+  // 載入位於「bg/0.jpg」路徑的背景圖片檔案
+  bgImage = loadImage('bg/0.jpg');
   // 載入位於「1/停止/全部停止.png」路徑的停止圖片精靈檔案
   idleSpriteSheet = loadImage('1/停止/全部停止.png');
   // 載入位於「1/走路/全部走路.png」路徑的走路圖片精靈檔案
@@ -52,7 +59,7 @@ function setup() {
   // 設定圖片繪製的對齊基準點為「圖片的正中心」，方便計算位置與水平鏡像翻轉
   imageMode(CENTER);
 
-  // 初始化角色1的 X 軸起始位置在畫布總寬度的 2/3 處
+  // 初始化角色1的 X 軸起始基準位置在畫布總寬度的 2/3 處
   posX = width * (2 / 3);
 
   // 呼叫透明間隙偵測函式，自動掃描「停止」圖片精靈並存入 idleFrames 陣列
@@ -147,19 +154,32 @@ function createUniformFrames(sheet, totalCount) {
   return uniform;
 }
 
-// draw 函式會不斷重複執行（預設每秒約 60 次），用來處理按鍵控制、角色動畫與飛行特效
+// draw 函式會不斷重複執行（預設每秒約 60 次），用來繪製三張串接背景、處理捲動與角色動畫
 function draw() {
-  // 設定畫布背景顏色為天空色（使用十六進位色碼 #87CEEB）
-  background('#87CEEB');
+  // 清除畫布底色（避免圖片尚未填滿時出現殘影）
+  background(0);
+
+  // 計算單張背景圖片在畫布上的等比例縮放尺寸（高度貼齊整個畫布高度 height）
+  let singleBgHeight = height;
+  // 依照 bg/0.jpg 的原始寬高比例計算單張背景顯示寬度
+  let singleBgWidth = singleBgHeight * (bgImage.width / bgImage.height);
+
+  // 計算三張串接背景的水平捲動最大與最小邊界限制
+  // 初始中心點對準中間那張背景（centerBgX = width / 2 + bgScrollX）
+  // 左側第一張背景的最左邊界為：(centerBgX - singleBgWidth * 1.5)，不可大於 0（不可超出畫布最左端留白）
+  let maxBgScrollX = max(0, (singleBgWidth * 1.5) - (width / 2));
+  // 右側第三張背景的最右邊界為：(centerBgX + singleBgWidth * 1.5)，不可小於 width（不可超出畫布最右端留白）
+  let minBgScrollX = min(0, (width / 2) - (singleBgWidth * 1.5));
 
   // 計算角色1的目標顯示高度：固定為整個畫布高度的 1/3
   let targetCharacterHeight = height / 3;
-
   // 依據目標顯示高度（height / 3）計算基準縮放倍率，讓特效與移動邊界能隨之等比例縮放
   let baseScaleFactor = targetCharacterHeight / idleSpriteSheet.height;
 
-  // 設定 RWD 自適應角色移動速度
+  // 設定 RWD 自適應的移動與背景捲動速度
   let moveSpeed = max(2, width * 0.004);
+  // 計算角色1的基準基準點 X 座標（畫布寬度的 2/3 處）
+  let anchorX = width * (2 / 3);
   // 設定角色碰撞邊界的安全半寬（以人物本體約 120px 換算，讓角色身體能貼近螢幕最左右端）
   let bodyHalfWidth = (120 * baseScaleFactor) / 2;
   // 計算角色中心點可移動的最左邊界
@@ -167,29 +187,47 @@ function draw() {
   // 計算角色中心點可移動的最右邊界
   let maxX = width - bodyHalfWidth;
 
-  // 如果目前「不是」正在發功中，才允許左右方向鍵控制移動或切換回待機狀態
+  // 如果目前「不是」正在發功中，才允許左右方向鍵控制背景捲動與角色移動
   if (currentState !== 'attack') {
     // 記錄上一幀狀態以便判斷是否有切換動作
     let previousState = currentState;
 
     // 即時偵測使用者是否正在按住鍵盤「右方向鍵（RIGHT_ARROW）」
     if (keyIsDown(RIGHT_ARROW)) {
+      // 切換為走路動畫並面朝右邊
       currentState = 'walk';
       facingDirection = 1;
-      posX += moveSpeed;
-      // 若抵達畫布最右端，停止移動但繼續播放走路動畫
-      if (posX >= maxX) {
-        posX = maxX;
+
+      // 步驟 1：若角色之前有往左走偏離基準點（2/3處），先讓角色走回基準點
+      if (posX < anchorX) {
+        posX = min(anchorX, posX + moveSpeed);
+      } 
+      // 步驟 2：當角色位於基準點且三張串接背景尚未捲動到最右端時，背景往左移動（角色原地踏步）
+      else if (bgScrollX > minBgScrollX) {
+        bgScrollX = max(minBgScrollX, bgScrollX - moveSpeed);
+      } 
+      // 步驟 3：當背景已經捲動到最右端（背景暫停捲動），角色1本體開始往右移動直到畫布最右端
+      else {
+        posX = min(maxX, posX + moveSpeed);
       }
     } 
     // 即時偵測使用者是否正在按住鍵盤「左方向鍵（LEFT_ARROW）」
     else if (keyIsDown(LEFT_ARROW)) {
+      // 切換為走路動畫並水平翻轉面朝左邊
       currentState = 'walk';
       facingDirection = -1;
-      posX -= moveSpeed;
-      // 若抵達畫布最左端，停止移動但繼續播放走路動畫
-      if (posX <= minX) {
-        posX = minX;
+
+      // 步驟 1：若角色之前有往右走偏離基準點（2/3處），先讓角色走回基準點
+      if (posX > anchorX) {
+        posX = max(anchorX, posX - moveSpeed);
+      } 
+      // 步驟 2：當角色位於基準點且三張串接背景尚未捲動到最左端時，背景往右移動（角色原地踏步）
+      else if (bgScrollX < maxBgScrollX) {
+        bgScrollX = min(maxBgScrollX, bgScrollX + moveSpeed);
+      } 
+      // 步驟 3：當背景已經捲動到最左端（背景暫停捲動），角色1本體開始往左移動直到畫布最左端
+      else {
+        posX = max(minX, posX - moveSpeed);
       }
     } 
     // 若沒有按住任何方向鍵，則回復為「停止（待機）」狀態
@@ -202,6 +240,19 @@ function draw() {
       currentFrame = 0;
     }
   }
+
+  // 計算中間那張背景圖片的當前中心 X 座標
+  let centerBgX = (width / 2) + bgScrollX;
+  // 計算背景圖片的 Y 軸中心座標（垂直置中填滿畫布高度）
+  let bgCenterY = height / 2;
+
+  // 繪製左、中、右三張無縫串接的背景圖片（使用 +1/-1 微幅重疊 1 像素消除縮放時的接縫細線）
+  // 1. 繪製左側串接的背景圖片
+  image(bgImage, centerBgX - singleBgWidth + 1, bgCenterY, singleBgWidth, singleBgHeight);
+  // 2. 繪製正中間的背景圖片
+  image(bgImage, centerBgX, bgCenterY, singleBgWidth, singleBgHeight);
+  // 3. 繪製右側串接的背景圖片
+  image(bgImage, centerBgX + singleBgWidth - 1, bgCenterY, singleBgWidth, singleBgHeight);
 
   // 依據目前的動作狀態，選出對應的圖片精靈與影格座標陣列
   let activeSheet;
@@ -380,8 +431,12 @@ function keyPressed() {
 function windowResized() {
   // 記錄視窗縮放前角色在畫布 X 軸上的相對位置比例
   let ratioX = posX / width;
+  // 記錄視窗縮放前背景捲動的相對比例
+  let bgRatio = bgScrollX / height;
   // 重新調整畫布的寬度與高度，使其隨時保持全螢幕狀態
   resizeCanvas(windowWidth, windowHeight);
-  // 依據原本的相對比例重新計算角色的新 X 座標，確保縮放視窗後角色仍維持在原本的相對位置
+  // 依據原本的相對比例重新計算角色的新 X 座標
   posX = width * ratioX;
+  // 依據新高度等比例還原背景捲動位置
+  bgScrollX = bgRatio * height;
 }
